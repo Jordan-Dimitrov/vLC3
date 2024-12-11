@@ -1,4 +1,6 @@
-use crate::registers;
+mod registers;
+mod instructions;
+
 use registers::R_COUNT;
 
 const MEMORY_MAX: usize = 65536;
