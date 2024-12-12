@@ -14,6 +14,42 @@ pub enum Register
     R_COND = 9,
 }
 
+impl Register {
+    pub fn new(value: u16) -> Register {
+        match value {
+            0 => Register::R_R0,
+            1 => Register::R_R1,
+            2 => Register::R_R2,
+            3 => Register::R_R3,
+            4 => Register::R_R4,
+            5 => Register::R_R5,
+            6 => Register::R_R6,
+            7 => Register::R_R7,
+            8 => Register::R_PC,
+            9 => Register::R_COND,
+            _ => panic!("invalid register"),
+        }
+    }
+}
+pub struct Registers {
+    registers: [u16; R_COUNT]
+}
+
+impl Registers {
+    pub fn new() -> Self {
+        Self { registers: [0; R_COUNT]}
+    }
+
+    pub fn read(&self, register: Register) -> u16 {
+        self.registers[register as usize]
+    }
+
+    pub fn write(&mut self, register: Register, value: u16) {
+        self.registers[register as usize] = value
+    }
+
+
+}
 pub enum Flags
 {
     FL_POS = 1 << 0,
