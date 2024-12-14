@@ -35,13 +35,13 @@ impl Vm {
             match op
             {
                 OpCodes::OP_ADD => self.add(instruction),
-                OpCodes::OP_AND => (),
-                OpCodes::OP_NOT => (),
-                OpCodes::OP_BR => (),
-                OpCodes::OP_JMP => (),
-                OpCodes::OP_JSR => (),
-                OpCodes::OP_LD => (),
-                OpCodes::OP_LDI => (),
+                OpCodes::OP_AND => self.and(instruction),
+                OpCodes::OP_NOT => self.not(instruction),
+                OpCodes::OP_BR => self.branch(instruction),
+                OpCodes::OP_JMP => self.jmp(instruction),
+                OpCodes::OP_JSR => self.jsr(instruction),
+                OpCodes::OP_LD => self.load(instruction),
+                OpCodes::OP_LDI => self.ldi(instruction),
                 OpCodes::OP_LDR => (),
                 OpCodes::OP_LEA => (),
                 OpCodes::OP_ST => (),
@@ -76,6 +76,116 @@ impl Vm {
 
             self.registers.write(r0, r1 + r2);
         }
+
+        self.update_flags(r0_clone);
+    }
+
+    fn ldi(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0_clone = Register::new(r0.clone());
+        let r0 = Register::new(r0);
+
+        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+
+        let r_pc = self.registers.read(Register::R_PC);
+
+        self.registers.write(r0, Self::mem_read(Self::mem_read(r_pc + pc_offset)));
+
+        self.update_flags(r0_clone);
+
+    }
+
+    fn and(&mut self, instruction: u16)
+    {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0_clone = Register::new(r0.clone());
+        let r0 = Register::new(r0);
+
+        let r1 = (instruction >> 6) & 0x7;
+        let r1 = Register::new(r1);
+        let r1 = self.registers.read(r1);
+
+        let imm_flag = (instruction >> 5) & 0x1;
+
+        if imm_flag != 0 {
+            let imm5 = Self::sign_extend(instruction & 0x1F, 5);
+            self.registers.write(r0, r1 & imm5);
+        }
+        else
+        {
+            let r2: u16 = instruction & 0x7;
+            let r2 = Register::new(r2);
+            let r2 = self.registers.read(r2);
+
+            self.registers.write(r0, r1 & r2);
+        }
+
+        self.update_flags(r0_clone);
+    }
+
+    fn not(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0_clone = Register::new(r0.clone());
+        let r0 = Register::new(r0);
+
+        let r1 = (instruction >> 6) & 0x7;
+        let r1 = Register::new(r1);
+        let r1 = self.registers.read(r1);
+
+        self.registers.write(r0, !r1);
+        self.update_flags(r0_clone);
+    }
+
+    fn branch(&mut self, instruction: u16) {
+        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let cond_flag = (instruction >> 9) & 0x7;
+        let cond_flag_clone = cond_flag;
+
+        let r_cond = self.registers.read(Register::R_COND);
+
+        if cond_flag & r_cond == 1 {
+            self.registers.write(Register::R_PC, cond_flag_clone + pc_offset);
+        }
+    }
+
+    fn jmp(&mut self, instruction: u16) {
+        let r1 = (instruction >> 6) & 0x7;
+        let r1 = Register::new(r1);
+        let r1 = self.registers.read(r1);
+
+        self.registers.write(Register::R_PC, r1);
+    }
+
+    fn jsr(&mut self, instruction: u16) {
+        let long_flag = (instruction >> 11) & 1;
+        let r_pc = self.registers.read(Register::R_PC);
+
+        self.registers.write(Register::R_R7, r_pc);
+
+        if long_flag != 0 {
+            let long_pc_offset = Self::sign_extend(instruction & 0x7FF, 11);
+            self.registers.write(Register::R_PC, r_pc + long_pc_offset);
+        }
+        else
+        {
+            let r1 = (instruction >> 6) & 0x7;
+            let r1 = Register::new(r1);
+            let r1 = self.registers.read(r1);
+
+            self.registers.write(Register::R_PC, r1);
+        }
+    }
+
+    fn load(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0_clone = Register::new(r0.clone());
+        let r0 = Register::new(r0);
+
+        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+
+        let r_pc = self.registers.read(Register::R_PC);
+
+        self.registers.write(r0, Self::mem_read(r_pc + pc_offset));
 
         self.update_flags(r0_clone);
     }
