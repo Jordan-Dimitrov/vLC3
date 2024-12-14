@@ -1,11 +1,14 @@
 mod registers;
 mod instructions;
+mod trap_routines;
 
+use std::io;
+use std::io::{Read, Write};
 use std::process::exit;
 use crate::vm::registers::{Register, Registers};
 use crate::vm::instructions::{*};
 use crate::vm::registers::Flags::{FL_NEG, FL_POS, FL_ZRO};
-
+use crate::vm::trap_routines::{*};
 const MEMORY_MAX: usize = 65536;
 
 pub struct Vm {
@@ -40,17 +43,93 @@ impl Vm {
                 OpCodes::OP_BR => self.branch(instruction),
                 OpCodes::OP_JMP => self.jmp(instruction),
                 OpCodes::OP_JSR => self.jsr(instruction),
-                OpCodes::OP_LD => self.load(instruction),
+                OpCodes::OP_LD => self.ld(instruction),
                 OpCodes::OP_LDI => self.ldi(instruction),
-                OpCodes::OP_LDR => (),
-                OpCodes::OP_LEA => (),
-                OpCodes::OP_ST => (),
-                OpCodes::OP_STI => (),
-                OpCodes::OP_STR => (),
-                OpCodes::OP_TRAP => (),
+                OpCodes::OP_LDR => self.ldr(instruction),
+                OpCodes::OP_LEA => self.lea(instruction),
+                OpCodes::OP_ST => self.st(instruction),
+                OpCodes::OP_STI => self.sti(instruction),
+                OpCodes::OP_STR => self.str(instruction),
+                OpCodes::OP_TRAP => {
+                    let r_pc = self.registers.read(Register::R_PC);
+                    self.registers.write(Register::R_R7, r_pc);
+                    let trap = TrapRoutine::new(instruction & 0xFF);
+
+                    match trap {
+                        TrapRoutine::TRAP_GETC => self.trap_getc(),
+                        TrapRoutine::TRAP_OUT => self.trap_out(),
+                        TrapRoutine::TRAP_PUTS => self.trap_put(),
+                        TrapRoutine::TRAP_IN => self.trap_in(),
+                        TrapRoutine::TRAP_PUTSP => self.trap_putsp(),
+                        TrapRoutine::TRAP_HALT => {}
+                    }
+                },
                 OpCodes::OP_RES | OpCodes::OP_RTI => break
             }
         }
+    }
+
+    fn trap_put(&mut self) {
+        let mut c = self.registers.read(Register::R_R0);
+
+        while self.memory[c as usize] != 0 {
+            let character = self.memory[c as usize] as u8 as char;
+            print!("{}", character);
+            c+=1;
+        }
+
+        io::stdout().flush().unwrap();
+    }
+
+    fn get_char() -> u8 {
+        io::stdin().bytes().next().and_then(|result| result.ok()).unwrap()
+    }
+
+    fn trap_getc(&mut self) {
+        self.registers.write(Register::R_R0, Self::get_char() as u16);
+        io::stdout().flush().unwrap();
+    }
+
+    fn trap_out(&mut self) {
+        let r0 = self.registers.read(Register::R_R0);
+        print!("{}", r0 as u8 as char);
+
+        io::stdout().flush().unwrap();
+    }
+
+    fn trap_in(&mut self) {
+        println!("Input: ");
+        let c = Self::get_char();
+        print!("{}", c);
+        io::stdout().flush().unwrap();
+
+        self.registers.write(Register::R_R0, c as u16);
+        self.update_flags(Register::R_R0);
+    }
+
+    fn trap_putsp(&mut self) {
+        let mut c = self.registers.read(Register::R_R0) as usize;
+
+        while self.memory[c] != 0 {
+            let char1 = (self.memory[c] & 0xFF) as u8 as char;
+            print!("{}", char1);
+
+            let char2 = (self.memory[c] >> 8) as u8 as char;
+            if char2 != '\0' {
+                print!("{}", char2);
+            }
+
+            c+=1;
+        }
+
+        io::stdout().flush().unwrap();
+    }
+
+    fn halt() {
+        println!("HALT");
+        io::stdout().flush().unwrap();
+
+        exit(0);
     }
 
     fn add(&mut self, instruction: u16) {
@@ -176,7 +255,7 @@ impl Vm {
         }
     }
 
-    fn load(&mut self, instruction: u16) {
+    fn ld(&mut self, instruction: u16) {
         let r0 = (instruction >> 9) & 0x7;
         let r0_clone = Register::new(r0.clone());
         let r0 = Register::new(r0);
@@ -190,8 +269,78 @@ impl Vm {
         self.update_flags(r0_clone);
     }
 
+    fn ldr(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0_clone = Register::new(r0.clone());
+        let r0 = Register::new(r0);
+
+        let r1 = (instruction >> 6) & 0x7;
+        let r1 = Register::new(r1);
+        let r1 = self.registers.read(r1);
+
+        let offset = Self::sign_extend(instruction & 0x3F, 6);
+
+        self.registers.write(r0, Self::mem_read(r1 + offset));
+
+        self.update_flags(r0_clone);
+    }
+
+    fn lea(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0_clone = Register::new(r0.clone());
+        let r0 = Register::new(r0);
+
+        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let r_pc = self.registers.read(Register::R_PC);
+
+        self.registers.write(r0, r_pc + pc_offset);
+
+        self.update_flags(r0_clone);
+    }
+
+    fn st(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0 = Register::new(r0);
+        let r0 = self.registers.read(r0);
+
+        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let r_pc = self.registers.read(Register::R_PC);
+
+        Self::mem_write(r_pc + pc_offset, r0)
+    }
+
+    fn sti(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0 = Register::new(r0);
+        let r0 = self.registers.read(r0);
+
+        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let r_pc = self.registers.read(Register::R_PC);
+
+        Self::mem_write(Self::mem_read(r_pc + pc_offset), r0);
+    }
+
+    fn str(&mut self, instruction: u16) {
+        let r0 = (instruction >> 9) & 0x7;
+        let r0 = Register::new(r0);
+        let r0 = self.registers.read(r0);
+
+        let r1 = (instruction >> 6) & 0x7;
+        let r1 = Register::new(r1);
+        let r1 = self.registers.read(r1);
+
+        let offset = Self::sign_extend(instruction & 0x3F, 6);
+
+        Self::mem_write(r1 + offset, r0);
+    }
+
+
     fn mem_read(address: u16) -> u16{
         1
+    }
+
+    fn mem_write(address : u16, value: u16) {
+
     }
 
     pub fn test() {
