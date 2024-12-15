@@ -249,3 +249,44 @@ pub fn str(vm: &mut Vm, instruction: u16) {
 
     vm.mem_write(r1.overflowing_add(offset).0, r0);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vm::{Vm, registers::{Register, Registers}, MEMORY_MAX};
+
+    fn create_vm() -> Vm {
+        Vm {
+            memory: [0; MEMORY_MAX],
+            registers: Registers::new(),
+            active: true,
+        }
+    }
+
+    #[test]
+    fn test_add() {
+        let mut vm = create_vm();
+
+        let instruction: u16 = (0b000000 << 9) | (0b00001 << 6) | (1 << 5) | 5;
+
+        vm.registers.write(Register::R_R1, 10);
+
+        add(&mut vm, instruction);
+
+        assert_eq!(vm.registers.read(Register::R_R0), 15);
+    }
+
+    #[test]
+    fn test_jmp() {
+        let mut vm = create_vm();
+
+        let instruction: u16 = (0b000011 << 9) | (0b00001 << 6);
+
+        vm.registers.write(Register::R_R1, 0x4000);
+
+        jmp(&mut vm, instruction);
+
+        assert_eq!(vm.registers.read(Register::R_PC), 0x4000);
+    }
+
+}
