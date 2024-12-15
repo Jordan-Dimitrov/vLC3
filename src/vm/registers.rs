@@ -56,3 +56,8 @@ pub enum Flags
     FL_ZRO = 1 << 1,
     FL_NEG = 1 << 2,
 }
+
+pub enum MemoryMappedRegister {
+    KeyboardStatusRegister = 0xFE00,
+    KEYBOARD_DATA_REGISTER = 0xFE02
+}

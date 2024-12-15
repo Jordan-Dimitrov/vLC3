@@ -2,36 +2,40 @@ mod registers;
 mod instructions;
 mod trap_routines;
 
+use std::fs::File;
 use std::io;
-use std::io::{Read, Write};
+use std::io::{Read, stdin, stdout, Write};
 use std::process::exit;
-use crate::vm::registers::{Register, Registers};
+use crate::vm::registers::{MemoryMappedRegister, Register, Registers};
 use crate::vm::instructions::{*};
 use crate::vm::registers::Flags::{FL_NEG, FL_POS, FL_ZRO};
 use crate::vm::trap_routines::{*};
-const MEMORY_MAX: usize = 65536;
-
+const MEMORY_MAX: usize = std::u16::MAX as usize + 1;
+const START_POSITION: u16 = 0x3000;
 pub struct Vm {
     memory: [u16; MEMORY_MAX],
-    registers: Registers
+    registers: Registers,
+    active: bool
 }
 
 impl Vm {
     pub fn new() -> Self {
-        Self { memory: [0; MEMORY_MAX], registers: Registers::new()}
+        Self { memory: [0; MEMORY_MAX], registers: Registers::new(), active: false}
     }
 
-    pub fn start(&mut self, args: Vec<String>) {
-        Self::load_arguements(args);
+    pub fn start(&mut self, arg: String) {
 
-        self.registers.write(Register::R_COND, FL_ZRO as u16);
+        let file = File::open(arg).expect("should provide ");
+        self.read_image(file);
 
-        loop {
-            let mut address = self.registers.read(Register::R_PC);
-            let instruction = Self::mem_read(address);
+        self.registers.write(Register::R_PC, START_POSITION);
+        self.active = true;
 
-            address+=1;
-            self.registers.write(Register::R_PC, address);
+        while self.active {
+            let pc = self.registers.read(Register::R_PC);
+            let instruction = self.mem_read(pc);
+
+            self.registers.write(Register::R_PC, pc.overflowing_add(1).0);
 
             let op: u16 = instruction >> 12;
             let op = OpCodes::new(op);
@@ -50,86 +54,80 @@ impl Vm {
                 OpCodes::OP_ST => self.st(instruction),
                 OpCodes::OP_STI => self.sti(instruction),
                 OpCodes::OP_STR => self.str(instruction),
-                OpCodes::OP_TRAP => {
-                    let r_pc = self.registers.read(Register::R_PC);
-                    self.registers.write(Register::R_R7, r_pc);
-                    let trap = TrapRoutine::new(instruction & 0xFF);
-
-                    match trap {
-                        TrapRoutine::TRAP_GETC => self.trap_getc(),
-                        TrapRoutine::TRAP_OUT => self.trap_out(),
-                        TrapRoutine::TRAP_PUTS => self.trap_put(),
-                        TrapRoutine::TRAP_IN => self.trap_in(),
-                        TrapRoutine::TRAP_PUTSP => self.trap_putsp(),
-                        TrapRoutine::TRAP_HALT => {}
-                    }
-                },
+                OpCodes::OP_TRAP => self.trap(instruction),
                 OpCodes::OP_RES | OpCodes::OP_RTI => break
             }
         }
     }
 
-    fn trap_put(&mut self) {
-        let mut c = self.registers.read(Register::R_R0);
+    fn trap(&mut self, instruction: u16) {
+        let trap = TrapRoutine::new(instruction & 0xFF);
 
-        while self.memory[c as usize] != 0 {
-            let character = self.memory[c as usize] as u8 as char;
-            print!("{}", character);
-            c+=1;
+        match trap {
+            TrapRoutine::TRAP_GETC => self.get_char(),
+            TrapRoutine::TRAP_OUT => self.trap_out(),
+            TrapRoutine::TRAP_PUTS => self.trap_put(),
+            TrapRoutine::TRAP_IN => self.trap_in(),
+            TrapRoutine::TRAP_PUTSP => self.trap_putsp(),
+            TrapRoutine::TRAP_HALT => self.halt()
         }
-
-        io::stdout().flush().unwrap();
     }
 
-    fn get_char() -> u8 {
-        io::stdin().bytes().next().and_then(|result| result.ok()).unwrap()
+    fn halt(&mut self) {
+        println!("HALT");
+        self.active = false;
     }
 
-    fn trap_getc(&mut self) {
-        self.registers.write(Register::R_R0, Self::get_char() as u16);
-        io::stdout().flush().unwrap();
+    fn trap_put(&mut self) {
+        let mut addr = self.registers.read(Register::R_R0);
+        let mut character = self.memory[addr as usize];
+
+        while character > 0 {
+            print!("{}", (character & 0b1111_1111) as u8 as char);
+            addr = addr.overflowing_add(1).0;
+            character = self.memory[addr as usize];
+        }
+        stdout().flush().expect("should not fail");
+    }
+
+    fn get_char(&mut self) {
+        let input: u16 = stdin()
+            .bytes()
+            .next()
+            .and_then(|result| result.ok())
+            .map(|byte| byte as u16)
+            .expect("should not fail");
+
+        self.registers.write(Register::R_R0, input & 0b1111_1111)
     }
 
     fn trap_out(&mut self) {
-        let r0 = self.registers.read(Register::R_R0);
-        print!("{}", r0 as u8 as char);
-
-        io::stdout().flush().unwrap();
+        print!("{}", self.registers.read(Register::R_R0) as u8 as char);
+        stdout().flush().expect("should not fail!");
     }
 
     fn trap_in(&mut self) {
-        println!("Input: ");
-        let c = Self::get_char();
-        print!("{}", c);
-        io::stdout().flush().unwrap();
+        print!("Input: ");
+        stdout().flush().expect("Should not fail");
 
-        self.registers.write(Register::R_R0, c as u16);
-        self.update_flags(Register::R_R0);
+        self.get_char();
     }
 
     fn trap_putsp(&mut self) {
-        let mut c = self.registers.read(Register::R_R0) as usize;
+        let mut addr = self.registers.read(Register::R_R0);
+        let mut character = self.memory[addr as usize];
 
-        while self.memory[c] != 0 {
-            let char1 = (self.memory[c] & 0xFF) as u8 as char;
-            print!("{}", char1);
-
-            let char2 = (self.memory[c] >> 8) as u8 as char;
-            if char2 != '\0' {
-                print!("{}", char2);
+        while character > 0 {
+            print!("{}", (character & 0b1111_1111) as u8 as char);
+            let second_part = (character >> 8) & 0b1111_1111;
+            if second_part == 0 {
+                break;
             }
-
-            c+=1;
+            print!("{}", second_part as u8 as char);
+            addr = addr.overflowing_add(1).0;
+            character = self.memory[addr as usize];
         }
-
-        io::stdout().flush().unwrap();
-    }
-
-    fn halt() {
-        println!("HALT");
-        io::stdout().flush().unwrap();
-
-        exit(0);
+        stdout().flush().expect("should not fail");
     }
 
     fn add(&mut self, instruction: u16) {
@@ -144,8 +142,8 @@ impl Vm {
         let imm_flag = (instruction >> 5) & 0x1;
 
         if imm_flag != 0 {
-            let imm5 = Self::sign_extend(instruction & 0x1F, 5);
-            self.registers.write(r0, r1 + imm5);
+            let imm5 = sign_extend(instruction & 0x1F, 5);
+            self.registers.write(r0, r1.overflowing_add(imm5).0);
         }
         else
         {
@@ -153,7 +151,7 @@ impl Vm {
             let r2 = Register::new(r2);
             let r2 = self.registers.read(r2);
 
-            self.registers.write(r0, r1 + r2);
+            self.registers.write(r0, r1.overflowing_add(r2).0);
         }
 
         self.update_flags(r0_clone);
@@ -164,11 +162,14 @@ impl Vm {
         let r0_clone = Register::new(r0.clone());
         let r0 = Register::new(r0);
 
-        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let pc_offset = sign_extend(instruction & 0x1FF, 9);
 
-        let r_pc = self.registers.read(Register::R_PC);
+        let pc = self.registers.read(Register::R_PC);
 
-        self.registers.write(r0, Self::mem_read(Self::mem_read(r_pc + pc_offset)));
+        let value = self.mem_read(pc.overflowing_add(pc_offset).0);
+        let read = self.mem_read(value);
+
+        self.registers.write(r0, read);
 
         self.update_flags(r0_clone);
 
@@ -186,8 +187,8 @@ impl Vm {
 
         let imm_flag = (instruction >> 5) & 0x1;
 
-        if imm_flag != 0 {
-            let imm5 = Self::sign_extend(instruction & 0x1F, 5);
+        if imm_flag > 0 {
+            let imm5 = sign_extend(instruction & 0x1F, 5);
             self.registers.write(r0, r1 & imm5);
         }
         else
@@ -216,14 +217,14 @@ impl Vm {
     }
 
     fn branch(&mut self, instruction: u16) {
-        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let pc_offset = sign_extend(instruction & 0x1FF, 9);
         let cond_flag = (instruction >> 9) & 0x7;
-        let cond_flag_clone = cond_flag;
 
         let r_cond = self.registers.read(Register::R_COND);
+        let pc = self.registers.read(Register::R_PC);
 
-        if cond_flag & r_cond == 1 {
-            self.registers.write(Register::R_PC, cond_flag_clone + pc_offset);
+        if cond_flag & r_cond > 0 {
+            self.registers.write(Register::R_PC, pc.overflowing_add(pc_offset).0);
         }
     }
 
@@ -237,21 +238,17 @@ impl Vm {
 
     fn jsr(&mut self, instruction: u16) {
         let long_flag = (instruction >> 11) & 1;
-        let r_pc = self.registers.read(Register::R_PC);
+        let pc = self.registers.read(Register::R_PC);
 
-        self.registers.write(Register::R_R7, r_pc);
+        self.registers.write(Register::R_R7, pc);
 
-        if long_flag != 0 {
-            let long_pc_offset = Self::sign_extend(instruction & 0x7FF, 11);
-            self.registers.write(Register::R_PC, r_pc + long_pc_offset);
+        if long_flag > 0 {
+            let long_pc_offset = sign_extend(instruction & 0x7FF, 11);
+            self.registers.write(Register::R_PC, pc.overflowing_add(long_pc_offset).0);
         }
         else
         {
-            let r1 = (instruction >> 6) & 0x7;
-            let r1 = Register::new(r1);
-            let r1 = self.registers.read(r1);
-
-            self.registers.write(Register::R_PC, r1);
+            self.registers.write(Register::R_PC, (instruction >> 6) & 0x7);
         }
     }
 
@@ -260,27 +257,29 @@ impl Vm {
         let r0_clone = Register::new(r0.clone());
         let r0 = Register::new(r0);
 
-        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let pc_offset = sign_extend(instruction & 0x1FF, 9);
 
         let r_pc = self.registers.read(Register::R_PC);
+        let read = self.mem_read(r_pc.overflowing_add(pc_offset).0);
 
-        self.registers.write(r0, Self::mem_read(r_pc + pc_offset));
+        self.registers.write(r0, read);
 
         self.update_flags(r0_clone);
     }
 
     fn ldr(&mut self, instruction: u16) {
-        let r0 = (instruction >> 9) & 0x7;
+        let r0 = (instruction >> 9) & 0b111;
         let r0_clone = Register::new(r0.clone());
         let r0 = Register::new(r0);
 
-        let r1 = (instruction >> 6) & 0x7;
+        let r1 = (instruction >> 6) & 0b111;
         let r1 = Register::new(r1);
         let r1 = self.registers.read(r1);
 
-        let offset = Self::sign_extend(instruction & 0x3F, 6);
+        let offset = sign_extend(instruction & 0b11_1111, 6);
+        let read = self.mem_read(r1.overflowing_add(offset).0);
 
-        self.registers.write(r0, Self::mem_read(r1 + offset));
+        self.registers.write(r0, read);
 
         self.update_flags(r0_clone);
     }
@@ -290,10 +289,10 @@ impl Vm {
         let r0_clone = Register::new(r0.clone());
         let r0 = Register::new(r0);
 
-        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let pc_offset = sign_extend(instruction & 0x1FF, 9);
         let r_pc = self.registers.read(Register::R_PC);
 
-        self.registers.write(r0, r_pc + pc_offset);
+        self.registers.write(r0, r_pc.overflowing_add(pc_offset).0);
 
         self.update_flags(r0_clone);
     }
@@ -303,10 +302,10 @@ impl Vm {
         let r0 = Register::new(r0);
         let r0 = self.registers.read(r0);
 
-        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let pc_offset = sign_extend(instruction & 0x1FF, 9);
         let r_pc = self.registers.read(Register::R_PC);
 
-        Self::mem_write(r_pc + pc_offset, r0)
+        self.mem_write(r_pc.overflowing_add(pc_offset).0, r0)
     }
 
     fn sti(&mut self, instruction: u16) {
@@ -314,10 +313,11 @@ impl Vm {
         let r0 = Register::new(r0);
         let r0 = self.registers.read(r0);
 
-        let pc_offset = Self::sign_extend(instruction & 0x1FF, 9);
+        let pc_offset = sign_extend(instruction & 0x1FF, 9);
         let r_pc = self.registers.read(Register::R_PC);
+        let read = self.mem_read(r_pc.overflowing_add(pc_offset).0);
 
-        Self::mem_write(Self::mem_read(r_pc + pc_offset), r0);
+        self.mem_write(read, r0);
     }
 
     fn str(&mut self, instruction: u16) {
@@ -325,50 +325,37 @@ impl Vm {
         let r0 = Register::new(r0);
         let r0 = self.registers.read(r0);
 
-        let r1 = (instruction >> 6) & 0x7;
+        let r1 = (instruction >> 6) & 0b111;
         let r1 = Register::new(r1);
         let r1 = self.registers.read(r1);
 
-        let offset = Self::sign_extend(instruction & 0x3F, 6);
+        let offset = sign_extend(instruction & 0x3F, 6);
 
-        Self::mem_write(r1 + offset, r0);
+        self.mem_write(r1.overflowing_add(offset).0, r0);
     }
 
-
-    fn mem_read(address: u16) -> u16{
-        1
-    }
-
-    fn mem_write(address : u16, value: u16) {
-
-    }
-
-    pub fn test() {
-        println!("{}", FL_ZRO as u16);
-        println!("{}", FL_NEG as u16);
-        println!("{}", FL_POS as u16);
-    }
-
-
-    fn load_arguements(args: Vec<String>) {
-        if args.len() < 2 {
-            println!("lc3 [image file1]...");
-            exit(2);
-        }
-
-        for i in args {
-            if Self::read_image(&i) {
-                println!("failed to load image: {}", i);
-                exit(1);
+    fn mem_read(&mut self, address: u16) -> u16{
+        if address == MemoryMappedRegister::KeyboardStatusRegister as u16 {
+            match stdin().bytes().next() {
+                None => {
+                    self.memory[MemoryMappedRegister::KeyboardStatusRegister as usize] = 0;
+                }
+                Some(a_byte) => {
+                    let character = a_byte.expect("should not fail") as u16;
+                    if character != 10 {
+                        self.memory[MemoryMappedRegister::KeyboardStatusRegister as usize] = 1 << 15;
+                        self.memory[MemoryMappedRegister::KEYBOARD_DATA_REGISTER as usize] = character;
+                    } else {
+                        self.memory[MemoryMappedRegister::KeyboardStatusRegister as usize] = 0;
+                    }
+                }
             }
         }
+        self.memory[address as usize]
     }
 
-    fn sign_extend(mut x: u16, bit_count: u16) -> u16 {
-        if (x >> (bit_count - 1)) & 1 != 0 {
-            x |= 0xFFFF << bit_count;
-        }
-        x
+    fn mem_write(&mut self, address : u16, value: u16) {
+        self.memory[address as usize] = value;
     }
 
     fn update_flags(&mut self, r: Register) {
@@ -385,7 +372,31 @@ impl Vm {
         }
     }
 
-    fn read_image(arg: &String) -> bool{
-        true
+    fn read_image(&mut self, mut program: File) {
+        let mut buffer: [u8; 2] = [0; 2];
+        program.read(&mut buffer).expect("should not fail");
+        let mut origin = swap_endian(buffer);
+        loop {
+            match program.read(&mut buffer) {
+                Ok(2) => {
+                    self.memory[origin as usize] = swap_endian(buffer);
+                    origin = origin.overflowing_add(1).0;
+                }
+                Ok(0) => break,
+                _ => panic!()
+            }
+        }
     }
+}
+
+fn swap_endian(original: [u8; 2]) -> u16 {
+    original[1] as u16 + ((original[0] as u16) << 8)
+}
+
+fn sign_extend(x: u16, bit_count: u16) -> u16 {
+    let mut y = x;
+    if ((y >> (bit_count - 1)) & 1) > 0 {
+        y |= 0xFFFF << bit_count;
+    }
+    y
 }
