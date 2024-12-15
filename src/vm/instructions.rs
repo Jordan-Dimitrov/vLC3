@@ -1,3 +1,7 @@
+use crate::vm::registers::Register;
+use crate::vm::utils::sign_extend;
+use crate::vm::Vm;
+
 pub enum OpCodes
 {
     OP_BR,
@@ -40,4 +44,208 @@ impl OpCodes {
             _ => panic!("invalid opcode"),
         }
     }
+}
+
+pub fn add(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0_clone = Register::new(r0.clone());
+    let r0 = Register::new(r0);
+
+    let r1 = (instruction >> 6) & 0x7;
+    let r1 = Register::new(r1);
+    let r1 = vm.registers.read(r1);
+
+    let imm_flag = (instruction >> 5) & 0x1;
+
+    if imm_flag != 0 {
+        let imm5 = sign_extend(instruction & 0x1F, 5);
+        vm.registers.write(r0, r1.overflowing_add(imm5).0);
+    }
+    else
+    {
+        let r2: u16 = instruction & 0x7;
+        let r2 = Register::new(r2);
+        let r2 = vm.registers.read(r2);
+
+        vm.registers.write(r0, r1.overflowing_add(r2).0);
+    }
+
+    vm.update_flags(r0_clone);
+}
+
+pub fn ldi(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0_clone = Register::new(r0.clone());
+    let r0 = Register::new(r0);
+
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+
+    let pc = vm.registers.read(Register::R_PC);
+
+    let value = vm.mem_read(pc.overflowing_add(pc_offset).0);
+    let read = vm.mem_read(value);
+
+    vm.registers.write(r0, read);
+
+    vm.update_flags(r0_clone);
+
+}
+
+pub fn and(vm: &mut Vm, instruction: u16)
+{
+    let r0 = (instruction >> 9) & 0x7;
+    let r0_clone = Register::new(r0.clone());
+    let r0 = Register::new(r0);
+
+    let r1 = (instruction >> 6) & 0x7;
+    let r1 = Register::new(r1);
+    let r1 = vm.registers.read(r1);
+
+    let imm_flag = (instruction >> 5) & 0x1;
+
+    if imm_flag > 0 {
+        let imm5 = sign_extend(instruction & 0x1F, 5);
+        vm.registers.write(r0, r1 & imm5);
+    }
+    else
+    {
+        let r2: u16 = instruction & 0x7;
+        let r2 = Register::new(r2);
+        let r2 = vm.registers.read(r2);
+
+        vm.registers.write(r0, r1 & r2);
+    }
+
+    vm.update_flags(r0_clone);
+}
+
+pub fn not(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0_clone = Register::new(r0.clone());
+    let r0 = Register::new(r0);
+
+    let r1 = (instruction >> 6) & 0x7;
+    let r1 = Register::new(r1);
+    let r1 = vm.registers.read(r1);
+
+    vm.registers.write(r0, !r1);
+    vm.update_flags(r0_clone);
+}
+
+pub fn branch(vm: &mut Vm, instruction: u16) {
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+    let cond_flag = (instruction >> 9) & 0x7;
+
+    let r_cond = vm.registers.read(Register::R_COND);
+    let pc = vm.registers.read(Register::R_PC);
+
+    if cond_flag & r_cond > 0 {
+        vm.registers.write(Register::R_PC, pc.overflowing_add(pc_offset).0);
+    }
+}
+
+pub fn jmp(vm: &mut Vm, instruction: u16) {
+    let r1 = (instruction >> 6) & 0x7;
+    let r1 = Register::new(r1);
+    let r1 = vm.registers.read(r1);
+
+    vm.registers.write(Register::R_PC, r1);
+}
+
+pub  fn jsr(vm: &mut Vm, instruction: u16) {
+    let long_flag = (instruction >> 11) & 1;
+    let pc = vm.registers.read(Register::R_PC);
+
+    vm.registers.write(Register::R_R7, pc);
+
+    if long_flag > 0 {
+        let long_pc_offset = sign_extend(instruction & 0x7FF, 11);
+        vm.registers.write(Register::R_PC, pc.overflowing_add(long_pc_offset).0);
+    }
+    else
+    {
+        vm.registers.write(Register::R_PC, (instruction >> 6) & 0x7);
+    }
+}
+
+pub fn ld(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0_clone = Register::new(r0.clone());
+    let r0 = Register::new(r0);
+
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+
+    let r_pc = vm.registers.read(Register::R_PC);
+    let read = vm.mem_read(r_pc.overflowing_add(pc_offset).0);
+
+    vm.registers.write(r0, read);
+
+    vm.update_flags(r0_clone);
+}
+
+pub fn ldr(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0b111;
+    let r0_clone = Register::new(r0.clone());
+    let r0 = Register::new(r0);
+
+    let r1 = (instruction >> 6) & 0b111;
+    let r1 = Register::new(r1);
+    let r1 = vm.registers.read(r1);
+
+    let offset = sign_extend(instruction & 0b11_1111, 6);
+    let read = vm.mem_read(r1.overflowing_add(offset).0);
+
+    vm.registers.write(r0, read);
+
+    vm.update_flags(r0_clone);
+}
+
+pub fn lea(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0_clone = Register::new(r0.clone());
+    let r0 = Register::new(r0);
+
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+    let r_pc = vm.registers.read(Register::R_PC);
+
+    vm.registers.write(r0, r_pc.overflowing_add(pc_offset).0);
+
+    vm.update_flags(r0_clone);
+}
+
+pub fn st(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0 = Register::new(r0);
+    let r0 = vm.registers.read(r0);
+
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+    let r_pc = vm.registers.read(Register::R_PC);
+
+    vm.mem_write(r_pc.overflowing_add(pc_offset).0, r0)
+}
+
+pub fn sti(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0 = Register::new(r0);
+    let r0 = vm.registers.read(r0);
+
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+    let r_pc = vm.registers.read(Register::R_PC);
+    let read = vm.mem_read(r_pc.overflowing_add(pc_offset).0);
+
+    vm.mem_write(read, r0);
+}
+
+pub fn str(vm: &mut Vm, instruction: u16) {
+    let r0 = (instruction >> 9) & 0x7;
+    let r0 = Register::new(r0);
+    let r0 = vm.registers.read(r0);
+
+    let r1 = (instruction >> 6) & 0b111;
+    let r1 = Register::new(r1);
+    let r1 = vm.registers.read(r1);
+
+    let offset = sign_extend(instruction & 0x3F, 6);
+
+    vm.mem_write(r1.overflowing_add(offset).0, r0);
 }
