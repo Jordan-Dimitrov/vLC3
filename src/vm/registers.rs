@@ -48,7 +48,13 @@ impl Registers {
         self.registers[register as usize] = value
     }
 
+    pub fn read_r(&self, register: u16) -> u16 {
+        self.registers[register as usize]
+    }
 
+    pub fn write_r(&mut self, register: u16, value: u16) {
+        self.registers[register as usize] = value
+    }
 }
 pub enum Flags
 {

@@ -97,9 +97,12 @@ impl Vm {
         self.memory[address as usize] = value;
     }
 
-    fn update_flags(&mut self, r: Register) {
-        let value = self.registers.read(r);
+    fn update_flags_r(&mut self, r: u16) {
+        let value = self.registers.read_r(r);
+        self.flag_set(value);
+    }
 
+    fn flag_set(&mut self, value: u16) {
         if value == 0 {
             self.registers.write(Register::R_COND, FL_ZRO as u16);
         }
