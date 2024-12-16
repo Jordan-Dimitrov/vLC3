@@ -7,6 +7,6 @@ A virtual machine for the [LC3](https://en.wikipedia.org/wiki/Little_Computer_3)
 - Full simulation of the LC-3 instruction set
 - Basic I/O operations
 
-## Getting Started
+### Getting Started
 1. Add the desired lc3 program in the ```/programs``` folder
 2. Run the vm ```cargo run -- <program-name>```
