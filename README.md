@@ -9,4 +9,7 @@ A virtual machine for the [LC3](https://en.wikipedia.org/wiki/Little_Computer_3)
 
 ### Getting Started
 1. Add the desired lc3 program in the ```/programs``` folder
-2. Run the vm ```cargo run -- <program-name>```
+2. Run the vm
+```bash 
+cargo run -- <program-name>
+```
